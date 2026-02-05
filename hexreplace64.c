@@ -1,4 +1,4 @@
-// hex_repair_large_fixed.c
+// hex_replace_large_fixed.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,10 +10,11 @@
 #define BYTES_PER_LINE 16
 #define MAX_SIGNATURE_LENGTH 32
 #define BUFFER_SIZE 65536
-#define MAX_SIGNATURES 50
+#define MAX_SIGNATURES 100
 
 // 64-bit dosya offset'leri
 #ifdef _WIN32
+    #include <windows.h>
     typedef __int64 file_offset_t;
     #define FSEEK _fseeki64
     #define FTELL _ftelli64
@@ -33,6 +34,7 @@ typedef struct {
     char extension[16];
 } FileSignature;
 
+// REPLACE için imza veritabanı
 FileSignature known_signatures[] = {
     {"JPEG", {0xFF, 0xD8, 0xFF}, 3, 0, "JPEG image file", "jpg"},
     {"PNG", {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, 8, 0, "PNG image", "png"},
@@ -49,7 +51,11 @@ FileSignature known_signatures[] = {
     {"GIF", {0x47, 0x49, 0x46, 0x38}, 4, 0, "GIF image", "gif"},
     {"WAV", {0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45}, 12, 0, "WAVE audio", "wav"},
     {"MP3", {0x49, 0x44, 0x33}, 3, 0, "MP3 audio", "mp3"},
-    {"SQLite", {0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00}, 16, 0, "SQLite database", "db"}
+    {"SQLite", {0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00}, 16, 0, "SQLite database", "db"},
+    {"DOC/XLS", {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, 8, 0, "Microsoft Office", "doc"},
+    {"DOCX", {0x50, 0x4B, 0x03, 0x04}, 4, 0, "Office Open XML", "docx"},
+    {"7Z", {0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}, 6, 0, "7-Zip archive", "7z"},
+    {"BZIP2", {0x42, 0x5A, 0x68}, 3, 0, "BZIP2 compressed", "bz2"}
 };
 
 #define SIGNATURE_COUNT (sizeof(known_signatures) / sizeof(known_signatures[0]))
@@ -61,48 +67,50 @@ void format_size(file_offset_t size, char *buffer, size_t buffer_size);
 bool get_file_size(FILE *file, file_offset_t *size);
 void show_progress_bar(file_offset_t current, file_offset_t total, const char *operation);
 FileSignature* find_signature_by_name(const char *name);
-bool analyze_corruption(FILE *file, file_offset_t position, 
-                       FileSignature *sig, unsigned char bad_byte,
-                       int *corrupt_count, int *total_bytes);
-int repair_signature_at(FILE *file, file_offset_t position, 
-                       FileSignature *sig, unsigned char bad_byte,
-                       bool interactive, bool verbose, bool test_mode);
-int auto_repair_range(FILE *file, file_offset_t start_offset, 
-                     file_offset_t byte_count, unsigned char bad_byte,
-                     bool interactive, bool verbose, bool test_mode,
-                     bool show_progress_flag);
-int targeted_repair(FILE *file, file_offset_t start_offset,
-                   FileSignature *sig, unsigned char bad_byte,
-                   bool interactive, bool verbose, bool test_mode);
-void hex_display(FILE *file, file_offset_t start_offset, 
-                file_offset_t byte_count, int max_lines);
+int find_signatures_in_range(FILE *file, file_offset_t start_offset, 
+                            file_offset_t byte_count, FileSignature *found[], 
+                            int max_found, unsigned char replace_byte);
+bool create_file_backup(const char *original, const char *backup_name, bool show_progress_flag);
+int replace_signatures_in_range(FILE *file, file_offset_t start_offset, 
+                               file_offset_t byte_count, FileSignature *target_sig,
+                               unsigned char replace_byte, bool replace_all, 
+                               bool interactive, bool verbose, bool show_progress_flag);
+void hex_dump_range(FILE *file, file_offset_t start_offset, 
+                   file_offset_t byte_count, int max_lines, 
+                   int skip_lines, bool show_progress_flag);
 
 void print_usage(const char *program_name) {
-    printf("\n=== Large File Hex Repair (Supports >2GB files) ===\n");
+    printf("\n=== Large File Hex REPLACE (Supports >2GB files) ===\n");
+    printf("REPLACE: Replace file signatures with specified byte pattern\n");
     printf("Usage: %s <file> <offset> <bytes> [options]\n\n", program_name);
     
     printf("Parameters support suffixes: K,M,G,T (e.g., 4K, 2M, 1G, 0x1000)\n\n");
     
-    printf("REPAIR OPTIONS (fix corrupted files without backup):\n");
-    printf("  -t <format>  Repair specific format (e.g., JPEG, PNG, PDF)\n");
-    printf("  -x <char>    Character that indicates corruption (e.g., *, ?, #)\n");
-    printf("  -X <hex>     Hex value that indicates corruption (e.g., 00, FF, 2A)\n");
-    printf("  -A           Auto-repair mode (try all formats with common patterns)\n");
-    printf("  -i           Interactive mode (ask before each repair)\n");
-    printf("  -p           Show progress bar\n");
-    printf("  -v           Verbose mode (show details)\n");
-    printf("  -test        Test mode (show what would be repaired, no changes)\n");
-    
-    printf("\nVIEW/SCAN OPTIONS:\n");
-    printf("  -f           Find and show file signatures\n");
-    printf("  -s <file>    Save repaired portion to new file\n");
-    printf("  -c <N>       Limit display to N lines\n");
+    printf("REPLACE OPTIONS (change/obfuscate signatures):\n");
+    printf("  -r <char>    Replace found signatures with ASCII character\n");
+    printf("  -R <hex>     Replace with specific hex byte (e.g., 00, FF, 2A)\n");
+    printf("  -t <format>  Target specific format (e.g., JPEG, PDF, ZIP)\n");
+    printf("  -a           Replace ALL found signatures (not just first)\n");
+    printf("  -i           Interactive mode (ask before each replace)\n");
+    printf("  -b <file>    Create backup before modifying\n");
+    printf("  -f           Find signatures without replacing\n");
     printf("  -l           List all available formats\n");
+    printf("  -p           Show progress bar\n");
+    printf("  -v           Verbose mode\n");
     
-    printf("\nExamples:\n");
-    printf("  %s corrupted.jpg 0 0 -t JPEG -x * -i\n", program_name);
-    printf("  %s broken.iso 0 1G -t ISO -X 00 -p\n", program_name);
-    printf("  %s damaged.mp4 0 100M -A -v\n", program_name);
+    printf("\nVIEW OPTIONS:\n");
+    printf("  -view        Show hex dump after replacement\n");
+    printf("  -c <N>       Limit display to N lines\n");
+    printf("  -skip <N>    Skip first N lines in display\n");
+    
+    printf("\nEXAMPLES (REPLACE - changes signatures):\n");
+    printf("  %s secret.jpg 0 0 -r * -t JPEG -b backup.jpg\n", program_name);
+    printf("  %s document.pdf 0 0 -R 00 -t PDF -i\n", program_name);
+    printf("  %s data.zip 0 0 -r # -t ZIP -a -p\n", program_name);
+    printf("  %s file.exe 0 0 -R FF -t EXE -view\n", program_name);
+    
+    printf("\nIMPORTANT: This tool CHANGES/DESTROYS file signatures!\n");
+    printf("           Use -b to create backups before modifying!\n");
 }
 
 file_offset_t parse_size_with_suffix(const char *str) {
@@ -180,227 +188,289 @@ FileSignature* find_signature_by_name(const char *name) {
     return NULL;
 }
 
-bool analyze_corruption(FILE *file, file_offset_t position, 
-                       FileSignature *sig, unsigned char bad_byte,
-                       int *corrupt_count, int *total_bytes) {
+int find_signatures_in_range(FILE *file, file_offset_t start_offset, 
+                            file_offset_t byte_count, FileSignature *found[], 
+                            int max_found, unsigned char replace_byte) {
     
-    FSEEK(file, position + sig->offset, SEEK_SET);
-    unsigned char buffer[MAX_SIGNATURE_LENGTH];
+    unsigned char buffer[512];
+    int found_count = 0;
     
-    size_t bytes_read = fread(buffer, 1, sig->length, file);
-    if (bytes_read != sig->length) {
+    for (int i = 0; i < SIGNATURE_COUNT && found_count < max_found; i++) {
+        FileSignature *sig = &known_signatures[i];
+        
+        // Check if signature fits in our range
+        if (byte_count > 0 && sig->offset + sig->length > byte_count) {
+            continue;
+        }
+        
+        // Read at signature position
+        file_offset_t read_pos = start_offset + sig->offset;
+        if (FSEEK(file, read_pos, SEEK_SET) != 0) {
+            continue;
+        }
+        
+        size_t bytes_read = fread(buffer, 1, sig->length, file);
+        if (bytes_read != sig->length) {
+            continue;
+        }
+        
+        // Check if it matches OR if it's already replaced with our byte
+        bool matches_signature = (memcmp(buffer, sig->signature, sig->length) == 0);
+        bool matches_replacement = true;
+        
+        for (int j = 0; j < sig->length; j++) {
+            if (buffer[j] != replace_byte) {
+                matches_replacement = false;
+                break;
+            }
+        }
+        
+        if (matches_signature || matches_replacement) {
+            found[found_count++] = sig;
+        }
+    }
+    
+    return found_count;
+}
+
+bool create_file_backup(const char *original, const char *backup_name, bool show_progress_flag) {
+    FILE *src = fopen(original, "rb");
+    if (!src) {
+        printf("Error opening source file for backup\n");
         return false;
     }
     
-    *corrupt_count = 0;
-    *total_bytes = sig->length;
+    FILE *dst = fopen(backup_name, "wb");
+    if (!dst) {
+        printf("Error creating backup file: %s\n", backup_name);
+        fclose(src);
+        return false;
+    }
     
-    // Check each byte
-    for (int i = 0; i < sig->length; i++) {
-        if (buffer[i] == bad_byte) {
-            (*corrupt_count)++;
+    file_offset_t file_size;
+    if (!get_file_size(src, &file_size)) {
+        printf("Error getting file size for backup\n");
+        fclose(src);
+        fclose(dst);
+        return false;
+    }
+    
+    printf("Creating backup: %s -> %s\n", original, backup_name);
+    
+    unsigned char *buffer = malloc(BUFFER_SIZE);
+    if (!buffer) {
+        printf("Error allocating buffer for backup\n");
+        fclose(src);
+        fclose(dst);
+        return false;
+    }
+    
+    file_offset_t total_copied = 0;
+    file_offset_t last_update = 0;
+    
+    while (total_copied < file_size) {
+        size_t to_read = BUFFER_SIZE;
+        if (total_copied + to_read > file_size) {
+            to_read = (size_t)(file_size - total_copied);
+        }
+        
+        size_t bytes_read = fread(buffer, 1, to_read, src);
+        if (bytes_read == 0) break;
+        
+        size_t bytes_written = fwrite(buffer, 1, bytes_read, dst);
+        if (bytes_written != bytes_read) {
+            printf("Error writing backup\n");
+            break;
+        }
+        
+        total_copied += bytes_written;
+        
+        if (show_progress_flag && (total_copied - last_update) > (10 * 1024 * 1024)) {
+            show_progress_bar(total_copied, file_size, "Backup");
+            last_update = total_copied;
         }
     }
     
-    return (*corrupt_count) > 0;
+    if (show_progress_flag) {
+        show_progress_bar(file_size, file_size, "Backup");
+        printf("\n");
+    }
+    
+    free(buffer);
+    fclose(src);
+    fclose(dst);
+    
+    char size_str[64];
+    format_size(total_copied, size_str, sizeof(size_str));
+    printf("Backup created: %s (%s)\n", backup_name, size_str);
+    
+    return true;
 }
 
-int repair_signature_at(FILE *file, file_offset_t position, 
-                       FileSignature *sig, unsigned char bad_byte,
-                       bool interactive, bool verbose, bool test_mode) {
+int replace_signatures_in_range(FILE *file, file_offset_t start_offset, 
+                               file_offset_t byte_count, FileSignature *target_sig,
+                               unsigned char replace_byte, bool replace_all, 
+                               bool interactive, bool verbose, bool show_progress_flag) {
     
-    FSEEK(file, position + sig->offset, SEEK_SET);
-    unsigned char current[MAX_SIGNATURE_LENGTH];
-    size_t read = fread(current, 1, sig->length, file);
+    int replacements_done = 0;
     
-    if (read != sig->length) {
-        if (verbose) printf("Could not read signature bytes\n");
-        return 0;
+    if (verbose) {
+        printf("Searching for signatures in range: ");
+        char start_str[64], count_str[64];
+        format_size(start_offset, start_str, sizeof(start_str));
+        format_size(byte_count, count_str, sizeof(count_str));
+        printf("%s to %s+%s\n", start_str, start_str, count_str);
     }
     
-    // Check if already correct
-    if (memcmp(current, sig->signature, sig->length) == 0) {
-        if (verbose) printf("Signature already correct\n");
-        return 0;
-    }
-    
-    // Count corrupted bytes
-    int corrupted_bytes = 0;
-    for (int i = 0; i < sig->length; i++) {
-        if (current[i] == bad_byte) {
-            corrupted_bytes++;
+    // If specific target signature provided
+    if (target_sig) {
+        file_offset_t sig_pos = start_offset + target_sig->offset;
+        
+        // Check bounds
+        file_offset_t file_size;
+        get_file_size(file, &file_size);
+        if (sig_pos + target_sig->length > file_size) {
+            printf("Signature position beyond file end\n");
+            return 0;
         }
+        
+        // Read current bytes
+        FSEEK(file, sig_pos, SEEK_SET);
+        unsigned char current[64];
+        fread(current, 1, target_sig->length, file);
+        
+        printf("\n=== SIGNATURE REPLACEMENT ===\n");
+        printf("Target: %s signature at offset ", target_sig->name);
+        char offset_str[64];
+        format_size(sig_pos, offset_str, sizeof(offset_str));
+        printf("%s\n", offset_str);
+        
+        printf("Original signature: ");
+        for (int i = 0; i < target_sig->length; i++) {
+            printf("%02X ", target_sig->signature[i]);
+        }
+        printf("\nCurrent bytes:      ");
+        for (int i = 0; i < target_sig->length; i++) {
+            printf("%02X ", current[i]);
+        }
+        printf("\n");
+        
+        printf("Replace with: 0x%02X", replace_byte);
+        if (isprint(replace_byte)) {
+            printf(" ('%c')", replace_byte);
+        }
+        printf("\n");
+        
+        if (interactive) {
+            printf("\nReplace this signature? (y/N): ");
+            char response[10];
+            fgets(response, sizeof(response), stdin);
+            if (response[0] != 'y' && response[0] != 'Y') {
+                printf("Cancelled\n");
+                return 0;
+            }
+        }
+        
+        // Perform replacement
+        FSEEK(file, sig_pos, SEEK_SET);
+        for (int i = 0; i < target_sig->length; i++) {
+            fwrite(&replace_byte, 1, 1, file);
+        }
+        fflush(file);
+        
+        printf("✅ Replaced %d bytes\n", target_sig->length);
+        return 1;
     }
     
-    if (corrupted_bytes == 0) {
-        if (verbose) printf("No matching bad bytes found (expected 0x%02X)\n", bad_byte);
+    // Search for all signatures
+    FileSignature *found_sigs[20];
+    int found_count = find_signatures_in_range(file, start_offset, byte_count, 
+                                              found_sigs, 20, replace_byte);
+    
+    if (found_count == 0) {
+        printf("No signatures found in specified range\n");
         return 0;
     }
     
-    // Show analysis
-    printf("\n🔍 %s Analysis at offset ", sig->name);
-    char offset_str[64];
-    format_size(position + sig->offset, offset_str, sizeof(offset_str));
-    printf("%s:\n", offset_str);
-    
-    printf("Expected: ");
-    for (int i = 0; i < sig->length; i++) {
-        printf("%02X ", sig->signature[i]);
-    }
-    printf("\nCurrent:  ");
-    for (int i = 0; i < sig->length; i++) {
-        if (current[i] == bad_byte) {
-            printf("\033[1;31m%02X\033[0m ", current[i]); // Red for bad bytes
-        } else if (current[i] == sig->signature[i]) {
-            printf("\033[1;32m%02X\033[0m ", current[i]); // Green for correct
-        } else {
-            printf("\033[1;33m%02X\033[0m ", current[i]); // Yellow for different
-        }
-    }
-    printf("\n");
-    
-    printf("Status: %d/%d bytes corrupted by 0x%02X\n", 
-           corrupted_bytes, sig->length, bad_byte);
-    
-    if (test_mode) {
-        printf("TEST MODE: Would repair %d bytes\n", corrupted_bytes);
-        return corrupted_bytes;
+    printf("\n=== SIGNATURE REPLACEMENT ===\n");
+    printf("Found %d signature(s):\n", found_count);
+    for (int i = 0; i < found_count; i++) {
+        printf("%d. %s at offset +0x%llX (%d bytes)\n", 
+               i + 1, found_sigs[i]->name, 
+               (long long)found_sigs[i]->offset, found_sigs[i]->length);
     }
     
     if (interactive) {
-        printf("Repair? (y/N): ");
+        printf("\nReplace which signature? (1-%d, a=all, n=none): ", found_count);
         char response[10];
         fgets(response, sizeof(response), stdin);
-        if (response[0] != 'y' && response[0] != 'Y') {
-            printf("Skipped\n");
+        
+        if (response[0] == 'n' || response[0] == 'N') {
+            printf("Cancelled\n");
             return 0;
         }
-    }
-    
-    // Perform repair
-    if (!test_mode) {
-        FSEEK(file, position + sig->offset, SEEK_SET);
-        for (int i = 0; i < sig->length; i++) {
-            if (current[i] == bad_byte) {
-                fwrite(&sig->signature[i], 1, 1, file);
-            } else {
-                // Skip already correct bytes
-                fseek(file, 1, SEEK_CUR);
+        
+        if (response[0] == 'a' || response[0] == 'A') {
+            replace_all = true;
+        } else {
+            int choice = atoi(response);
+            if (choice < 1 || choice > found_count) {
+                printf("Invalid choice\n");
+                return 0;
+            }
+            // Replace only selected one
+            target_sig = found_sigs[choice - 1];
+            found_count = 1;
+            for (int i = 0; i < found_count; i++) {
+                if (i != choice - 1) found_sigs[i] = NULL;
             }
         }
-        fflush(file);
     }
     
-    printf("✅ Repaired %d bytes\n", corrupted_bytes);
-    return corrupted_bytes;
-}
-
-int auto_repair_range(FILE *file, file_offset_t start_offset, 
-                     file_offset_t byte_count, unsigned char bad_byte,
-                     bool interactive, bool verbose, bool test_mode,
-                     bool show_progress_flag) {
-    
-    file_offset_t file_size;
-    get_file_size(file, &file_size);
-    
-    if (byte_count == 0) {
-        byte_count = file_size - start_offset;
+    // Perform replacements
+    printf("\nReplacing with: 0x%02X", replace_byte);
+    if (isprint(replace_byte)) {
+        printf(" ('%c')", replace_byte);
     }
-    
-    printf("\n🤖 AUTO-REPAIR MODE\n");
-    printf("Bad byte pattern: 0x%02X", bad_byte);
-    if (isprint(bad_byte)) printf(" ('%c')", bad_byte);
     printf("\n");
     
-    int total_repairs = 0;
-    int total_bytes_repaired = 0;
-    file_offset_t bytes_scanned = 0;
-    
-    // Scan through the range
-    for (int sig_idx = 0; sig_idx < SIGNATURE_COUNT; sig_idx++) {
-        FileSignature *sig = &known_signatures[sig_idx];
+    for (int i = 0; i < found_count; i++) {
+        if (found_sigs[i] == NULL) continue;
         
-        // Check if signature could fit
-        if (sig->offset + sig->length > byte_count) {
-            continue;
+        file_offset_t sig_pos = start_offset + found_sigs[i]->offset;
+        
+        if (verbose) {
+            printf("Replacing %s at offset ", found_sigs[i]->name);
+            char pos_str[64];
+            format_size(sig_pos, pos_str, sizeof(pos_str));
+            printf("%s\n", pos_str);
         }
         
-        file_offset_t sig_position = start_offset + sig->offset;
-        
-        // Check bounds
-        if (sig_position + sig->length > file_size) {
-            continue;
+        FSEEK(file, sig_pos, SEEK_SET);
+        for (int j = 0; j < found_sigs[i]->length; j++) {
+            fwrite(&replace_byte, 1, 1, file);
         }
         
-        // Analyze for corruption
-        int corrupt_count, total_bytes;
-        if (analyze_corruption(file, start_offset, sig, bad_byte, 
-                              &corrupt_count, &total_bytes)) {
-            
-            if (verbose) {
-                printf("Potential corruption found: %s at offset ", sig->name);
-                char pos_str[64];
-                format_size(sig_position, pos_str, sizeof(pos_str));
-                printf("%s\n", pos_str);
-            }
-            
-            int repaired = repair_signature_at(file, start_offset, sig, bad_byte,
-                                             interactive, verbose, test_mode);
-            
-            if (repaired > 0) {
-                total_repairs++;
-                total_bytes_repaired += repaired;
-            }
-        }
-        
-        bytes_scanned += sig->length;
+        replacements_done++;
         
         if (show_progress_flag) {
-            show_progress_bar(bytes_scanned, byte_count, "Scanning");
+            show_progress_bar(i + 1, found_count, "Replacing");
         }
     }
+    
+    fflush(file);
     
     if (show_progress_flag) {
         printf("\n");
     }
     
-    printf("\nAuto-repair complete:\n");
-    printf("  Scanned: ");
-    char scanned_str[64];
-    format_size(bytes_scanned, scanned_str, sizeof(scanned_str));
-    printf("%s\n", scanned_str);
-    printf("  Repairs: %d signatures\n", total_repairs);
-    printf("  Bytes repaired: %d\n", total_bytes_repaired);
-    
-    return total_repairs;
+    printf("\n✅ Total replacements: %d\n", replacements_done);
+    return replacements_done;
 }
 
-int targeted_repair(FILE *file, file_offset_t start_offset,
-                   FileSignature *sig, unsigned char bad_byte,
-                   bool interactive, bool verbose, bool test_mode) {
-    
-    printf("\n🎯 TARGETED REPAIR: %s\n", sig->name);
-    printf("Signature length: %d bytes\n", sig->length);
-    printf("Bad byte: 0x%02X", bad_byte);
-    if (isprint(bad_byte)) printf(" ('%c')", bad_byte);
-    printf("\n");
-    
-    file_offset_t file_size;
-    get_file_size(file, &file_size);
-    
-    // Check bounds
-    file_offset_t sig_position = start_offset + sig->offset;
-    if (sig_position + sig->length > file_size) {
-        printf("Error: Signature position beyond file end\n");
-        return 0;
-    }
-    
-    return repair_signature_at(file, start_offset, sig, bad_byte,
-                              interactive, verbose, test_mode);
-}
-
-void hex_display(FILE *file, file_offset_t start_offset, 
-                file_offset_t byte_count, int max_lines) {
+void hex_dump_range(FILE *file, file_offset_t start_offset, 
+                   file_offset_t byte_count, int max_lines, 
+                   int skip_lines, bool show_progress_flag) {
     
     file_offset_t file_size;
     get_file_size(file, &file_size);
@@ -409,9 +479,29 @@ void hex_display(FILE *file, file_offset_t start_offset,
         byte_count = file_size - start_offset;
     }
     
+    if (start_offset >= file_size) {
+        printf("Error: Start offset beyond file size\n");
+        return;
+    }
+    
     FSEEK(file, start_offset, SEEK_SET);
     
-    printf("\nHex View (first %d lines):\n", max_lines);
+    unsigned char buffer[BYTES_PER_LINE];
+    file_offset_t total_read = 0;
+    int lines_displayed = 0;
+    int lines_skipped = 0;
+    
+    // Skip lines if requested
+    if (skip_lines > 0) {
+        file_offset_t skip_bytes = (file_offset_t)skip_lines * BYTES_PER_LINE;
+        if (skip_bytes < byte_count) {
+            FSEEK(file, skip_bytes, SEEK_CUR);
+            total_read += skip_bytes;
+            lines_skipped = skip_lines;
+        }
+    }
+    
+    printf("\nHex Dump:\n");
     printf("Offset          ");
     for (int i = 0; i < BYTES_PER_LINE; i++) {
         printf("%02X ", i);
@@ -422,15 +512,24 @@ void hex_display(FILE *file, file_offset_t start_offset,
     for (int i = 0; i < BYTES_PER_LINE; i++) printf("---");
     printf(" -------------\n");
     
-    unsigned char buffer[BYTES_PER_LINE];
-    int lines_displayed = 0;
-    
-    while (lines_displayed < max_lines) {
-        size_t bytes_read = fread(buffer, 1, BYTES_PER_LINE, file);
+    while (total_read < byte_count && (max_lines == 0 || lines_displayed < max_lines)) {
+        size_t to_read = BYTES_PER_LINE;
+        if (total_read + to_read > byte_count) {
+            to_read = (size_t)(byte_count - total_read);
+        }
+        
+        size_t bytes_read = fread(buffer, 1, to_read, file);
         if (bytes_read == 0) break;
         
-        printf("%014llX  ", (long long)(start_offset + (lines_displayed * BYTES_PER_LINE)));
+        // Show progress
+        if (show_progress_flag && (lines_displayed % 100 == 0)) {
+            show_progress_bar(total_read, byte_count, "Displaying");
+        }
         
+        // Print line
+        printf("%014llX  ", (long long)(start_offset + total_read));
+        
+        // Hex bytes
         for (int i = 0; i < BYTES_PER_LINE; i++) {
             if (i < bytes_read) {
                 printf("%02X ", buffer[i]);
@@ -440,6 +539,7 @@ void hex_display(FILE *file, file_offset_t start_offset,
             if (i == 7) printf(" ");
         }
         
+        // ASCII
         printf(" |");
         for (int i = 0; i < bytes_read; i++) {
             if (isprint(buffer[i]) && !iscntrl(buffer[i])) {
@@ -450,12 +550,33 @@ void hex_display(FILE *file, file_offset_t start_offset,
         }
         printf("|\n");
         
+        total_read += bytes_read;
         lines_displayed++;
     }
+    
+    if (show_progress_flag) {
+        show_progress_bar(byte_count, byte_count, "Displaying");
+        printf("\n");
+    }
+    
+    char displayed_str[64];
+    format_size(total_read, displayed_str, sizeof(displayed_str));
+    printf("\nDisplayed: %s", displayed_str);
+    
+    if (lines_skipped > 0) {
+        printf(" (skipped %d lines)", lines_skipped);
+    }
+    
+    if (lines_displayed >= max_lines && max_lines > 0) {
+        printf(" - limited to %d lines", max_lines);
+    }
+    
+    printf("\n");
 }
 
 int main(int argc, char *argv[]) {
-    printf("=== Large File Hex Repair (64-bit) ===\n");
+    printf("=== Large File Hex REPLACE (64-bit) ===\n");
+    printf("REPLACE: Change file signatures to obfuscate/destroy them\n");
     
     if (argc < 4) {
         print_usage(argv[0]);
@@ -467,52 +588,60 @@ int main(int argc, char *argv[]) {
     file_offset_t byte_count = parse_size_with_suffix(argv[3]);
     
     // Options
+    bool do_replace = false;
     bool interactive = false;
     bool verbose = false;
     bool show_progress_flag = false;
-    bool test_mode = false;
+    bool create_backup_file = false;
     bool find_only = false;
-    bool auto_repair_mode = false;
+    bool show_view = false;
+    bool replace_all = false;
+    char *backup_name = NULL;
     char *target_format = NULL;
-    unsigned char bad_char = 0;
-    unsigned char bad_hex = 0;
-    bool use_char = false;
-    bool use_hex = false;
-    char *save_filename = NULL;
-    int max_lines = 20;
+    unsigned char replace_byte = '*';
+    int max_lines = 0;
+    int skip_lines = 0;
     
     // Parse options
     for (int i = 4; i < argc; i++) {
-        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "-r") == 0 && i + 1 < argc) {
+            do_replace = true;
+            replace_byte = argv[++i][0];
+        }
+        else if (strcmp(argv[i], "-R") == 0 && i + 1 < argc) {
+            do_replace = true;
+            replace_byte = (unsigned char)strtol(argv[++i], NULL, 16);
+        }
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
             target_format = argv[++i];
         }
-        else if (strcmp(argv[i], "-x") == 0 && i + 1 < argc) {
-            use_char = true;
-            bad_char = argv[++i][0];
-        }
-        else if (strcmp(argv[i], "-X") == 0 && i + 1 < argc) {
-            use_hex = true;
-            bad_hex = (unsigned char)strtol(argv[++i], NULL, 16);
-        }
-        else if (strcmp(argv[i], "-A") == 0) auto_repair_mode = true;
         else if (strcmp(argv[i], "-i") == 0) interactive = true;
         else if (strcmp(argv[i], "-v") == 0) verbose = true;
         else if (strcmp(argv[i], "-p") == 0) show_progress_flag = true;
-        else if (strcmp(argv[i], "-test") == 0) test_mode = true;
+        else if (strcmp(argv[i], "-a") == 0) replace_all = true;
         else if (strcmp(argv[i], "-f") == 0) find_only = true;
-        else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
-            save_filename = argv[++i];
+        else if (strcmp(argv[i], "-view") == 0) show_view = true;
+        else if (strcmp(argv[i], "-b") == 0 && i + 1 < argc) {
+            create_backup_file = true;
+            backup_name = argv[++i];
         }
         else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
             max_lines = atoi(argv[++i]);
         }
+        else if (strcmp(argv[i], "-skip") == 0 && i + 1 < argc) {
+            skip_lines = atoi(argv[++i]);
+        }
         else if (strcmp(argv[i], "-l") == 0) {
-            printf("\nAvailable repair formats:\n");
+            printf("\nAvailable formats for REPLACE:\n");
+            printf("%-20s %-8s %-10s %s\n", "Format", "Ext", "Length", "Description");
+            printf("%-20s %-8s %-10s %s\n", "--------------------", "--------", "----------", 
+                   "--------------------------------------------------");
             for (int j = 0; j < SIGNATURE_COUNT; j++) {
-                printf("%-20s %-8s Offset: 0x%llX\n", 
+                printf("%-20s %-8s %-10d %s\n", 
                        known_signatures[j].name,
                        known_signatures[j].extension,
-                       (long long)known_signatures[j].offset);
+                       known_signatures[j].length,
+                       known_signatures[j].description);
             }
             return 0;
         }
@@ -523,25 +652,19 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Validate parameters
-    if (!find_only) {
-        if (!target_format && !auto_repair_mode) {
-            printf("Error: Repair requires -t <format> or -A (auto-repair)\n");
-            return 1;
-        }
-        
-        if (!use_char && !use_hex && !auto_repair_mode) {
-            printf("Error: Need corruption pattern (-x or -X)\n");
-            return 1;
-        }
+    // Validate
+    if (do_replace && !target_format && !replace_all) {
+        printf("Error: Replace operation requires -t <format> or -a for all\n");
+        return 1;
     }
     
-    if (test_mode) {
-        printf("\n⚠️  TEST MODE: No changes will be made to the file\n");
+    if (find_only && do_replace) {
+        printf("Error: Cannot use -f (find only) with replace options\n");
+        return 1;
     }
     
     // Open file
-    FILE *file = fopen(filename, test_mode ? "rb" : "r+b");
+    FILE *file = fopen(filename, do_replace ? "r+b" : "rb");
     if (!file) {
         printf("Error opening file: %s\n", filename);
         return 1;
@@ -565,124 +688,98 @@ int main(int argc, char *argv[]) {
     printf("Offset: %s\n", offset_str);
     printf("Range: %s\n", count_str);
     
-    // Determine bad byte
-    unsigned char bad_byte = 0;
-    if (use_char) bad_byte = bad_char;
-    else if (use_hex) bad_byte = bad_hex;
-    else if (auto_repair_mode) bad_byte = 0x00;
-    
-    if (auto_repair_mode) {
-        printf("\nAuto-repair will try common corruption patterns:\n");
-        printf("1. Null bytes (0x00)\n");
-        printf("2. All ones (0xFF)\n");
-        printf("3. Asterisk (0x2A)\n");
-        printf("4. Question mark (0x3F)\n");
-    }
-    
-    // Perform operations
-    if (find_only) {
-        printf("\n=== SIGNATURE SCAN ===\n");
-        
-        // Simple scan for signatures at offset
-        for (int i = 0; i < SIGNATURE_COUNT; i++) {
-            FileSignature *sig = &known_signatures[i];
-            
-            if (sig->offset + sig->length > byte_count && byte_count > 0) {
-                continue;
-            }
-            
-            FSEEK(file, offset + sig->offset, SEEK_SET);
-            unsigned char buffer[64];
-            size_t read = fread(buffer, 1, sig->length, file);
-            
-            if (read == sig->length) {
-                if (memcmp(buffer, sig->signature, sig->length) == 0) {
-                    printf("✅ Found: %s at offset +0x%llX\n", 
-                           sig->name, (long long)sig->offset);
-                }
-            }
-        }
-    }
-    else if (auto_repair_mode) {
-        printf("\n=== AUTO REPAIR MODE ===\n");
-        
-        // Try common corruption patterns
-        unsigned char patterns[] = {0x00, 0xFF, 0x2A, 0x3F, 0x20};
-        int total_repairs = 0;
-        
-        for (int p = 0; p < sizeof(patterns); p++) {
-            printf("\nTrying pattern 0x%02X:\n", patterns[p]);
-            int repairs = auto_repair_range(file, offset, byte_count, patterns[p],
-                                          interactive, verbose, test_mode, show_progress_flag);
-            total_repairs += repairs;
+    // Create backup if needed
+    if (create_backup_file && do_replace) {
+        if (!backup_name) {
+            // Generate backup name with timestamp
+            time_t now = time(NULL);
+            struct tm *t = localtime(&now);
+            backup_name = malloc(256);
+            snprintf(backup_name, 256, "%s.backup_%04d%02d%02d_%02d%02d%02d",
+                    filename,
+                    t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                    t->tm_hour, t->tm_min, t->tm_sec);
         }
         
-        printf("\nTotal repairs across all patterns: %d\n", total_repairs);
-    }
-    else if (target_format) {
-        FileSignature *sig = find_signature_by_name(target_format);
-        if (!sig) {
-            printf("Error: Unknown format '%s'\n", target_format);
+        if (!create_file_backup(filename, backup_name, show_progress_flag)) {
+            printf("Backup failed. Aborting.\n");
             fclose(file);
             return 1;
         }
-        
-        printf("\n=== TARGETED REPAIR ===\n");
-        int repaired = targeted_repair(file, offset, sig, bad_byte,
-                                     interactive, verbose, test_mode);
-        
-        if (repaired > 0 && !test_mode) {
-            printf("\n✅ Repair successful! %d bytes restored.\n", repaired);
+    }
+    
+    // Find or replace signatures
+    FileSignature *target_sig = NULL;
+    if (target_format) {
+        target_sig = find_signature_by_name(target_format);
+        if (!target_sig) {
+            printf("Error: Unknown format '%s'. Use -l to list formats.\n", target_format);
+            fclose(file);
+            return 1;
         }
     }
     
-    // Show hex view if not in test mode or if verbose
-    if (verbose || test_mode) {
-        int lines_to_show = (byte_count < 1024) ? (int)(byte_count / BYTES_PER_LINE) : max_lines;
-        hex_display(file, offset, byte_count, lines_to_show);
+    if (do_replace) {
+        printf("\n=== REPLACE OPERATION ===\n");
+        printf("WARNING: This will CHANGE/DESTROY file signatures!\n");
+        printf("Replacement byte: 0x%02X", replace_byte);
+        if (isprint(replace_byte)) {
+            printf(" ('%c')", replace_byte);
+        }
+        printf("\n");
+        
+        if (target_sig) {
+            printf("Target format: %s\n", target_sig->name);
+        } else if (replace_all) {
+            printf("Target: ALL signatures in range\n");
+        }
+        
+        int replacements = replace_signatures_in_range(file, offset, byte_count,
+                                                      target_sig, replace_byte,
+                                                      replace_all, interactive,
+                                                      verbose, show_progress_flag);
+        
+        if (replacements > 0) {
+            printf("\n✅ REPLACE operation completed successfully!\n");
+            printf("File signatures have been changed/obfuscated.\n");
+            printf("File may no longer be recognized by applications.\n");
+        }
     }
-    
-    // Save repaired portion if requested
-    if (save_filename && !test_mode) {
-        printf("\nSaving repaired portion to: %s\n", save_filename);
-        FILE *out = fopen(save_filename, "wb");
-        if (out) {
-            FSEEK(file, offset, SEEK_SET);
-            
-            unsigned char buffer[BUFFER_SIZE];
-            file_offset_t remaining = byte_count;
-            file_offset_t total_saved = 0;
-            
-            while (remaining > 0) {
-                size_t to_read = (remaining > BUFFER_SIZE) ? BUFFER_SIZE : (size_t)remaining;
-                size_t read = fread(buffer, 1, to_read, file);
-                if (read == 0) break;
-                
-                fwrite(buffer, 1, read, out);
-                remaining -= read;
-                total_saved += read;
+    else if (find_only) {
+        printf("\n=== SIGNATURE SCAN ===\n");
+        
+        FileSignature *found_sigs[20];
+        int found_count = find_signatures_in_range(file, offset, byte_count,
+                                                  found_sigs, 20, 0);
+        
+        if (found_count > 0) {
+            printf("Found %d signature(s):\n", found_count);
+            for (int i = 0; i < found_count; i++) {
+                printf("\n%d. %s\n", i + 1, found_sigs[i]->name);
+                printf("   Offset: +0x%llX\n", (long long)found_sigs[i]->offset);
+                printf("   Length: %d bytes\n", found_sigs[i]->length);
+                printf("   Signature: ");
+                for (int j = 0; j < found_sigs[i]->length; j++) {
+                    printf("%02X ", found_sigs[i]->signature[j]);
+                }
+                printf("\n   Extension: .%s\n", found_sigs[i]->extension);
+                printf("   Description: %s\n", found_sigs[i]->description);
             }
-            
-            fclose(out);
-            
-            char saved_str[64];
-            format_size(total_saved, saved_str, sizeof(saved_str));
-            printf("Saved: %s\n", saved_str);
+        } else {
+            printf("No signatures found in specified range\n");
         }
+    }
+    
+    // Show hex view if requested
+    if (show_view || (!do_replace && !find_only)) {
+        hex_dump_range(file, offset, byte_count, max_lines, skip_lines, show_progress_flag);
     }
     
     fclose(file);
     
-    if (!test_mode && (target_format || auto_repair_mode)) {
-        printf("\n🔧 REPAIR COMPLETE\n");
-        printf("File has been repaired. Test it with appropriate software.\n");
-        
-        if (target_format) {
-            FileSignature *sig = find_signature_by_name(target_format);
-            if (sig && sig->extension[0] != '\0') {
-                printf("Consider renaming to: *.%s if needed.\n", sig->extension);
-            }
-        }
+    if (do_replace && create_backup_file) {
+        printf("\n📁 Backup available: %s\n", backup_name);
+        printf("   Use backup to restore original file if needed.\n");
     }
     
     return 0;
