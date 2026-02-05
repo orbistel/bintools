@@ -1,0 +1,68 @@
+Kullanım Örnekleri
+
+1. Bozulmuş JPEG'i Onarma
+bash
+# JPEG imzası '*' karakteriyle bozulmuşsa
+hexrepair.exe corrupted.jpg 0 0 -t JPEG -x "*"
+
+# Veya hex değeriyle
+hexrepair.exe broken.jpg 0 256 -t JPEG -X 2A
+2. PNG Dosyasını Null Byte'lardan Kurtarma
+bash
+hexrepair.exe damaged.png 0 0 -t PNG -X 00 -i
+3. Otomatik Onarım (Tüm Formatları Dene)
+bash
+hexrepair.exe unknown.bin 0 512 -A -v
+4. İnteraktif Onarım (Her Adımda Sor)
+bash
+hexrepair.exe file.dat 0 0 -t PDF -x "#" -i -v
+5. Sadece Analiz (Onarım Yok)
+bash
+hexrepair.exe test.jpg 0 128 -f
+hexrepair.exe any.file 0 0 -l
+🔧 Nasıl Çalışır?
+Tespit: Verilen offset'te belirtilen karakteri (örn: *, ?, #) veya hex değeri (örn: 00, FF) arar
+
+Karşılaştırma: Beklenen imza ile mevcut byte'ları karşılaştırır
+
+Onarım: Farklı byte'ları doğru değerlerle değiştirir
+
+Doğrulama: Onarımın başarılı olduğunu gösterir
+
+📊 Örnek Çıktı
+text
+=== File Repair Utility ===
+File: corrupted_image.jpg
+Size: 24576 bytes (24.00 KB)
+Offset: 0x0 (0)
+Repair char: '*' (0x2A)
+Target format: JPEG
+Signature length: 3 bytes
+
+🔧 REPAIR ANALYSIS
+   Format: JPEG
+   Expected signature: FF D8 FF
+   Current bytes:      ?? ?? ?? 
+   Actual bytes:       2A 2A 2A
+   Bytes to repair: 3/3
+
+   Repair this signature? (y/N): y
+   ✅ Repair completed! 3 bytes fixed
+   Offset: 0x0
+
+✅ REPAIR SUMMARY
+File has been repaired successfully!
+You may want to:
+1. Test the repaired file
+2. Rename with correct extension if needed
+3. Consider renaming to: *.jpg
+⚠️ Güvenlik Önerileri
+Önce Test Edin: Önce -f ile sadece tespit yapın
+
+Yedek Alın: Onarmadan önce dosyanın kopyasını alın
+
+İnteraktif Kullanın: -i parametresi ile her adımda onay isteyin
+
+Küçük Parçalarla Başlayın: Önce 256 byte gibi küçük kısımlarla test yapın
+
+Bu program ile artık bozulmuş dosyaları kolayca onarabilir ve orijinal hallerine döndürebilirsiniz!
