@@ -1,0 +1,5 @@
+# REPLACE uygulaması (imzaları değiştirir)
+gcc -o hreplace64.exe hex_replace_large_fixed.c -Wall -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE
+
+# REPAIR uygulaması (önceden düzeltilmiş)
+gcc -o hrepair64.exe hex_repair_large_fixed2.c -Wall -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE
