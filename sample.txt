@@ -1,0 +1,48 @@
+E:\>hreplace64. exe e: \verintisol.dat 0 0 -r * -a
+= Large File Hex REPLACE (64-bit) ===
+REPLACE: Change file signatures to obfuscate/destroy them
+File: e: verintisol.dat
+Size: 22.54 GB
+offset: 0 bytes
+Range: 0 bytes
+
+REPLACE OPERATION
+WARNING: This will CHANGE/DESTROY file signatures!
+Replacement byte: 0x2A ('*')
+Target: ALL signatures in range
+
+SIGNATURE REPLACEMENT
+Found 1 signature(s):
+1. RAR at offset +0x0 (7 bytes)
+
+Replacing with: 0x2A ('*')
+rfa Total replacements: 1
+
+rfa REPLACE operation completed successfully!
+File signatures have been changed/obfuscated.
+File may no longer be recognized by applications.
+
+E:\>hrepair64 verintisol.dat 0 0 -t rar
+=== Large File Hex Repair (64-bit) ===
+File: verintisol.dat
+Size: 22.54 GB
+Offset: 0 bytes
+Range: 0 bytes
+
+TARGETED REPAIR ===
+
+TARGETED REPAIR: RAR
+Signature length: 7 bytes
+Bad byte: 0x2A (*)
+
+RAR Analysis at offset 0 bytes:
+Expected: 52 61 72 21 1A 07 00
+0[1; 31m2AD [Om 0[1; 31m2AD [Om 0[1; 31m2AD[Om 0[1; 31m2AD[Om 0[1; 31m2A0 [Om 0[1; 31m2AD[Om 0[1; 31m2AD [Om
+Status: 7/7 bytes corrupted by 0x2A
+Repaired 7 bytes
+
+Repair successful! 7 bytes restored.
+
+REPAIR COMPLETE
+File has been repaired. Test it with appropriate software.
+Consider renaming to: *. rar if needed.
