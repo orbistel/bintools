@@ -1,0 +1,105 @@
+C:\Users\Administrator\Documents\GitHub\bintools>hrepair64.exe 
+=== Large File Hex Repair (64-bit) ===
+
+=== Large File Hex Repair (Supports >2GB files) ===
+Usage: hrepair64.exe <file> <offset> <bytes> [options]
+
+Parameters support suffixes: K,M,G,T (e.g., 4K, 2M, 1G, 0x1000)
+
+REPAIR OPTIONS (fix corrupted files without backup):
+  -t <format>  Repair specific format (e.g., JPEG, PNG, PDF)
+  -x <char>    Character that indicates corruption (e.g., *, ?, #)
+  -X <hex>     Hex value that indicates corruption (e.g., 00, FF, 2A)
+  -A           Auto-repair mode (try all formats with common patterns)
+  -i           Interactive mode (ask before each repair)
+  -p           Show progress bar
+  -v           Verbose mode (show details)
+  -test        Test mode (show what would be repaired, no changes)
+
+VIEW/SCAN OPTIONS:
+  -f           Find and show file signatures
+  -s <file>    Save repaired portion to new file
+  -c <N>       Limit display to N lines
+  -l           List all available formats
+
+Examples:
+  hrepair64.exe corrupted.jpg 0 0 -t JPEG -x * -i
+  hrepair64.exe broken.iso 0 1G -t ISO -X 00 -p
+  hrepair64.exe damaged.mp4 0 100M -A -v
+
+C:\Users\Administrator\Documents\GitHub\bintools>hrepair64 c:\users\Administrator\Downloads\sample.dat 0 0 -test -t rar -l
+=== Large File Hex Repair (64-bit) ===
+
+Available repair formats:
+JPEG                 jpg      Offset: 0x0
+PNG                  png      Offset: 0x0
+PDF                  pdf      Offset: 0x0
+ZIP                  zip      Offset: 0x0
+MP4                  mp4      Offset: 0x4
+AVI                  avi      Offset: 0x0
+MKV                  mkv      Offset: 0x0
+ISO                  iso      Offset: 0x8001
+EXE                  exe      Offset: 0x0
+RAR                  rar      Offset: 0x0
+GZIP                 gz       Offset: 0x0
+BMP                  bmp      Offset: 0x0
+GIF                  gif      Offset: 0x0
+WAV                  wav      Offset: 0x0
+MP3                  mp3      Offset: 0x0
+SQLite               db       Offset: 0x0
+
+C:\Users\Administrator\Documents\GitHub\bintools>hrepair64 c:\users\Administrator\Downloads\sample.dat 0 0 -test -t rar -x *
+=== Large File Hex Repair (64-bit) ===
+
+ÔÜá´©Å  TEST MODE: No changes will be made to the file
+File: c:\users\Administrator\Downloads\sample.dat
+Size: 22.54 GB
+Offset: 0 bytes
+Range: 0 bytes
+
+=== TARGETED REPAIR ===
+
+­şÄ» TARGETED REPAIR: RAR
+Signature length: 7 bytes
+Bad byte: 0x2A ('*')
+
+­şöı RAR Analysis at offset 0 bytes:
+Expected: 52 61 72 21 1A 07 00
+Current:  ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m
+Status: 7/7 bytes corrupted by 0x2A
+TEST MODE: Would repair 7 bytes
+
+Hex View (first 1 lines):
+Offset          00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ASCII
+--------------- ------------------------------------------------ -------------
+00000000000000  2A 2A 2A 2A 2A 2A 2A 3B  D0 73 08 00 0D 00 00 00  |*******;.s......|
+
+C:\Users\Administrator\Documents\GitHub\bintools>hrepair64 c:\users\Administrator\Downloads\sample.dat 0 0 -t rar -x *
+=== Large File Hex Repair (64-bit) ===
+File: c:\users\Administrator\Downloads\sample.dat
+Size: 22.54 GB
+Offset: 0 bytes
+Range: 0 bytes
+
+=== TARGETED REPAIR ===
+
+­şÄ» TARGETED REPAIR: RAR
+Signature length: 7 bytes
+Bad byte: 0x2A ('*')
+
+­şöı RAR Analysis at offset 0 bytes:
+Expected: 52 61 72 21 1A 07 00
+Current:  ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m ←[1;31m2A←[0m
+Status: 7/7 bytes corrupted by 0x2A
+Ô£à Repaired 7 bytes
+
+Ô£à Repair successful! 7 bytes restored.
+
+­şöğ REPAIR COMPLETE
+File has been repaired. Test it with appropriate software.
+Consider renaming to: *.rar if needed.
+
+
+C:\Users\Administrator\Documents\GitHub\bintools>
+hrepair64 c:\users\Administrator\Downloads\sample.dat 0 0 -test -t rar -x *
+hrepair64 c:\users\Administrator\Downloads\sample.dat 0 0 -t rar -x *
